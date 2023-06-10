@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PDF URL Scanner</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.16.0/pdf-lib.min.js"></script>
+</head>
+<body>
+    <input type="file" id="file-input">
+    <input type="text" id="tracking-input" placeholder="Enter tracking code" maxlength="40">
+    <button id="update-button" disabled>Modify PDF</button>
+    <button id="download-button" disabled>Download PDF</button>
+    <div id="detected-url"></div>
+    <div id="modified-url"></div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.worker.min.js';
+        let pdfDoc = null;
+        let modifiedPdfBytes = null;
+        const fileInput = document.getElementById('file-input');
+        const trackingInput = document.getElementById('tracking-input');
+        const updateButton = document.getElementById('update-button');
+        const downloadButton = document.getElementById('download-button');
+        const detectedUrlDiv = document.getElementById('detected-url');
+        const modifiedUrlDiv = document.getElementById('modified-url');
+
+        fileInput.addEventListener('change', async function () {
+            const file = fileInput.files[0];
+            if (!file || file.type !== 'application/pdf') {
+                alert('Please select a PDF file.');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = async function (e) {
+                const typedArray = new Uint8Array(e.target.result);
+                pdfDoc = await PDFLib.PDFDocument.load(typedArray);
+                const pages = pdfDoc.getPages();
+
+                let detectedUrl = null;
+                for (let i = 0; i < pages.length; i++) {
+                    const annotations = pages[i].node.Annots();
+                    if (!annotations) continue;
+
+                    annotations.asArray().forEach(annotationRef => {
+                        const annotationDict = pdfDoc.context.lookup(annotationRef);
+                        const subtype = annotationDict.get(PDFLib.PDFName.of('Subtype'));
+                        const uriAction = annotationDict.get(PDFLib.PDFName.of('A'));
+
+                        if (subtype === PDFLib.PDFName.of('Link') && uriAction instanceof PDFLib.PDFDict) {
+                            const uri = uriAction.get(PDFLib.PDFName.of('URI'));
+                            if (uri instanceof PDFLib.PDFString && uri.asString().startsWith('https://showspace.so')) {
+                                detectedUrl = uri.asString();
+                                detectedUrlDiv.textContent = 'Detected URL: ' + detectedUrl;
+                                updateButton.disabled = false;
+                            }
+                        }
+                    });
+
+                    if (detectedUrl) break;
+                }
+
+                trackingInput.value = extractTrackingCode(detectedUrl);
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        function extractTrackingCode(url) {
+            if (!url) return '';
+            const searchParams = new URL(url).searchParams;
+            return searchParams.get('c') || '';
+        }
+
+        function sanitizeFilename(filename) {
+            return filename.replace(/[<>:"\/\\|?*]/g, '').substring(0, 200);
+        }
+
+        updateButton.addEventListener('click', async function () {
+            const trackingCode = trackingInput.value;
+            if (!trackingCode) {
+                alert('Please enter a tracking code.');
+                return;
+            }
+
+            const pages = pdfDoc.getPages();
+            for (let i = 0; i < pages.length; i++) {
+                const annotations = pages[i].node.Annots();
+                if (!annotations) continue;
+
+                annotations.asArray().forEach(annotationRef => {
+                    const annotationDict = pdfDoc.context.lookup(annotationRef);
+                    const subtype = annotationDict.get(PDFLib.PDFName.of('Subtype'));
+                    const uriAction = annotationDict.get(PDFLib.PDFName.of('A'));
+
+                    if (subtype === PDFLib.PDFName.of('Link') && uriAction instanceof PDFLib.PDFDict) {
+                        const uri = uriAction.get(PDFLib.PDFName.of('URI'));
+                        if (uri instanceof PDFLib.PDFString && uri.asString().startsWith('https://showspace.so')) {
+                            const url = new URL(uri.asString());
+                            url.searchParams.set('c', trackingCode);
+                            uriAction.set(PDFLib.PDFName.of('URI'), PDFLib.PDFString.of(url.toString()));
+                            modifiedUrlDiv.textContent = 'Modified URL: ' + url.toString();
+                        }
+                    }
+                });
+            }
+
+            const originalFilename = sanitizeFilename(fileInput.files[0].name);
+            const modifiedFilename = originalFilename.replace('.pdf', `_${trackingCode}.pdf`);
+
+            modifiedPdfBytes = await pdfDoc.save();
+            if (modifiedPdfBytes) {
+                downloadButton.disabled = false;
+                downloadButton.download = modifiedFilename;
+            } else {
+                alert('Failed to modify the PDF.');
+            }
+        });
+
+        downloadButton.addEventListener('click', function () {
+            if (!modifiedPdfBytes) {
+                alert('Please modify the PDF first.');
+                return;
+            }
+
+            const blob = new Blob([modifiedPdfBytes], { type: 'application/pdf' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = downloadButton.download;
+            link.click();
+        });
+    </script>
+</body>
+</html>
